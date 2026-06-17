@@ -1074,7 +1074,7 @@ const GALLERY_FILTERS = [
   {k:'bali',l:'Bali'},
 ];
 
-let enquiries  = JSON.parse(localStorage.getItem('kc_enqs') || '[]');
+let enquiries  = [];      // now loaded from Firebase — see FIREBASE DATA SYNC below
 let userPhotos = [];      // now loaded from Firebase — see FIREBASE DATA SYNC below
 let productSlots = {};    // now loaded from Firebase — see FIREBASE DATA SYNC below
 let iijsSlots = {};       // now loaded from Firebase — see FIREBASE DATA SYNC below
@@ -1130,6 +1130,18 @@ db.ref('iijsSlots').once('value').then(snap => {
   applyIIJSSlotImages();
   renderIIJSSlotsAdmin();
 }).catch(err => console.error('Firebase iijsSlots load failed:', err));
+
+// Enquiries use .on() instead of .once() so the admin panel updates live
+// the moment a new enquiry comes in from any device, without a refresh.
+db.ref('enquiries').on('value', snap => {
+  const val = snap.val() || {};
+  enquiries = Object.keys(val)
+    .map(key => Object.assign({fbKey: key}, val[key]))
+    .sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+  renderDash();
+  renderEnqs();
+  renderStats();
+}, err => console.error('Firebase enquiries load failed:', err));
 
 window.addEventListener('DOMContentLoaded', () => { applyProductSlotImages(); applyIIJSSlotImages(); });
 
@@ -1263,7 +1275,7 @@ function submitForm(e){
     status:  'new'
   };
   enquiries.unshift(enq);
-  localStorage.setItem('kc_enqs', JSON.stringify(enquiries));
+  db.ref('enquiries').push(enq).catch(err => console.error('Firebase enquiry save failed:', err));
 
   fetch('https://formspree.io/f/xykanpry', {
     method: 'POST',
@@ -1719,7 +1731,7 @@ function markRead(id){
   const idx = enquiries.findIndex(e => e.id === id);
   if(idx !== -1 && enquiries[idx].status !== 'read'){
     enquiries[idx].status = 'read';
-    localStorage.setItem('kc_enqs', JSON.stringify(enquiries));
+    if(enquiries[idx].fbKey) db.ref('enquiries/' + enquiries[idx].fbKey).update({status: 'read'}).catch(err => console.error('Firebase status update failed:', err));
     renderEnqs();
     renderDash();
     renderStats();
