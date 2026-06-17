@@ -1039,6 +1039,25 @@ footer{background:var(--black);border-top:1px solid rgba(201,168,76,.14);padding
 
 <div id="toast"></div>
 
+<!-- ─── FIREBASE (shared storage so photos show on every device, not just this browser) ─── -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script>
+// ⚠️ REPLACE the values below with YOUR Firebase project's config
+// (Firebase Console → Project Settings → General → scroll to "Your apps" → Web app → Config)
+const firebaseConfig = {
+  apiKey: "AIzaSyDbNGzpjMnI0SaCaTXdqIu0pgXlm2OG5QY",
+  authDomain: "kc-craft.firebaseapp.com",
+  databaseURL: "https://kc-craft-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kc-craft",
+  storageBucket: "kc-craft.firebasestorage.app",
+  messagingSenderId: "176387646285",
+  appId: "1:176387646285:web:7c407c9a7ba2a49a358d04"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+</script>
+
 <script>
 // ─── DATA ───────────────────────────────────────────
 const GALLERY_DATA = [];
@@ -1056,8 +1075,9 @@ const GALLERY_FILTERS = [
 ];
 
 let enquiries  = JSON.parse(localStorage.getItem('kc_enqs') || '[]');
-let userPhotos = JSON.parse(localStorage.getItem('kc_photos') || '[]');
-let productSlots = JSON.parse(localStorage.getItem('kc_product_slots') || '{}');
+let userPhotos = [];      // now loaded from Firebase — see FIREBASE DATA SYNC below
+let productSlots = {};    // now loaded from Firebase — see FIREBASE DATA SYNC below
+let iijsSlots = {};       // now loaded from Firebase — see FIREBASE DATA SYNC below
 let collections= JSON.parse(localStorage.getItem('kc_cols') || JSON.stringify([
   {id:1,name:'Gold Chains',desc:'Figaro, Franco, Rope, Box, Singapore',active:true},
   {id:2,name:'Silver Chains',desc:'925 sterling silver chains',active:true},
@@ -1084,14 +1104,34 @@ const PRODUCT_SLOTS = {
   'prod-9': { label: 'Bali Card', element: 'prod-img-9', type: 'product' }
 };
 
-if (Object.keys(productSlots).length === 0) {
-  for (let slot in PRODUCT_SLOTS) {
-    productSlots[slot] = { url: '', timestamp: null };
-  }
-  localStorage.setItem('kc_product_slots', JSON.stringify(productSlots));
-}
+// ─── FIREBASE DATA SYNC ────────────────────────────────────
+// Loads photos + slot images from the shared database on page load so
+// EVERY visitor and EVERY device you use as admin sees the same images.
+db.ref('photos').once('value').then(snap => {
+  userPhotos = snap.val() || [];
+  buildGallery();
+  renderPhotos();
+  renderDash();
+  renderStats();
+}).catch(err => console.error('Firebase photos load failed:', err));
 
-window.addEventListener('DOMContentLoaded', () => { applyProductSlotImages(); });
+db.ref('productSlots').once('value').then(snap => {
+  productSlots = snap.val() || {};
+  if (Object.keys(productSlots).length === 0) {
+    for (let slot in PRODUCT_SLOTS) productSlots[slot] = { url: '', timestamp: null };
+    db.ref('productSlots').set(productSlots);
+  }
+  applyProductSlotImages();
+  renderProductSlotsAdmin();
+}).catch(err => console.error('Firebase productSlots load failed:', err));
+
+db.ref('iijsSlots').once('value').then(snap => {
+  iijsSlots = snap.val() || {};
+  applyIIJSSlotImages();
+  renderIIJSSlotsAdmin();
+}).catch(err => console.error('Firebase iijsSlots load failed:', err));
+
+window.addEventListener('DOMContentLoaded', () => { applyProductSlotImages(); applyIIJSSlotImages(); });
 
 function goTo(id){
   const el = document.getElementById(id);
@@ -1310,7 +1350,7 @@ const CLD_CLOUD  = 'dc2mjss2o';
 const CLD_PRESET = 'KCcraft';
 
 function applyProductSlotImages() {
-  const slots = JSON.parse(localStorage.getItem('kc_product_slots') || '{}');
+  const slots = productSlots;
   for (let i = 1; i <= 4; i++) {
     const slotId = `hero-${i}`;
     const element = document.getElementById(`hero-img-${i}`);
@@ -1335,7 +1375,7 @@ function applyProductSlotImages() {
 }
 
 function renderProductSlotsAdmin() {
-  const slots = JSON.parse(localStorage.getItem('kc_product_slots') || '{}');
+  const slots = productSlots;
   const container = document.getElementById('product-slots-grid');
   if (!container) return;
   container.innerHTML = '';
@@ -1410,9 +1450,8 @@ function uploadProductSlotImage(slotId) {
       const res = await fetch(`https://api.cloudinary.com/v1_1/${CLD_CLOUD}/image/upload`, { method: 'POST', body: formData });
       const data = await res.json();
       if (data.secure_url) {
-        const slots = JSON.parse(localStorage.getItem('kc_product_slots') || '{}');
-        slots[slotId] = { url: data.secure_url, timestamp: Date.now() };
-        localStorage.setItem('kc_product_slots', JSON.stringify(slots));
+        productSlots[slotId] = { url: data.secure_url, timestamp: Date.now() };
+        db.ref('productSlots/' + slotId).set(productSlots[slotId]);
         statusDiv.innerHTML = '✅ Upload successful!';
         setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
         renderProductSlotsAdmin();
@@ -1430,9 +1469,8 @@ function uploadProductSlotImage(slotId) {
 
 function removeProductSlotImage(slotId) {
   if (confirm('Remove this photo? It will be deleted from the website.')) {
-    const slots = JSON.parse(localStorage.getItem('kc_product_slots') || '{}');
-    delete slots[slotId];
-    localStorage.setItem('kc_product_slots', JSON.stringify(slots));
+    delete productSlots[slotId];
+    db.ref('productSlots/' + slotId).remove();
     renderProductSlotsAdmin();
     applyProductSlotImages();
     showToast('Photo removed');
@@ -1456,7 +1494,7 @@ function doUpload(input){
         const data = await res.json();
         if(data.secure_url){
           userPhotos.unshift({id:Date.now()+Math.random(), cat:cat, label:f.name, dataUrl:data.secure_url, url:data.secure_url});
-          localStorage.setItem('kc_photos', JSON.stringify(userPhotos));
+          db.ref('photos').set(userPhotos);
           statusDiv.innerHTML = `✅ Uploaded ${f.name}`;
           setTimeout(()=>{statusDiv.style.display='none';},1500);
           renderPhotos();
@@ -1496,7 +1534,7 @@ function renderPhotos(){
 function delPhoto(id){
   if(confirm('Delete this photo permanently?')){
     userPhotos = userPhotos.filter(p => p.id !== id);
-    localStorage.setItem('kc_photos', JSON.stringify(userPhotos));
+    db.ref('photos').set(userPhotos);
     renderPhotos();
     renderGallery(lbCat);
     renderDash();
@@ -1506,7 +1544,7 @@ function delPhoto(id){
 }
 
 function renderIIJSSlotsAdmin() {
-  const slots = JSON.parse(localStorage.getItem('kc_iijs_slots') || '{}');
+  const slots = iijsSlots;
   const container = document.getElementById('iijs-slots-grid');
   if (!container) return;
   container.innerHTML = '';
@@ -1582,9 +1620,8 @@ function uploadIIJSSlotImage(slotId) {
       const res = await fetch(`https://api.cloudinary.com/v1_1/${CLD_CLOUD}/image/upload`, { method: 'POST', body: formData });
       const data = await res.json();
       if (data.secure_url) {
-        const slots = JSON.parse(localStorage.getItem('kc_iijs_slots') || '{}');
-        slots[slotId] = { url: data.secure_url, timestamp: Date.now() };
-        localStorage.setItem('kc_iijs_slots', JSON.stringify(slots));
+        iijsSlots[slotId] = { url: data.secure_url, timestamp: Date.now() };
+        db.ref('iijsSlots/' + slotId).set(iijsSlots[slotId]);
         statusDiv.innerHTML = '✅ Upload successful!';
         setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
         renderIIJSSlotsAdmin();
@@ -1602,9 +1639,8 @@ function uploadIIJSSlotImage(slotId) {
 
 function removeIIJSSlotImage(slotId) {
   if (confirm('Remove this photo? It will be deleted from the website.')) {
-    const slots = JSON.parse(localStorage.getItem('kc_iijs_slots') || '{}');
-    delete slots[slotId];
-    localStorage.setItem('kc_iijs_slots', JSON.stringify(slots));
+    delete iijsSlots[slotId];
+    db.ref('iijsSlots/' + slotId).remove();
     renderIIJSSlotsAdmin();
     applyIIJSSlotImages();
     showToast('Photo removed');
@@ -1612,7 +1648,7 @@ function removeIIJSSlotImage(slotId) {
 }
 
 function applyIIJSSlotImages() {
-  const slots = JSON.parse(localStorage.getItem('kc_iijs_slots') || '{}');
+  const slots = iijsSlots;
   for (let i = 1; i <= 6; i++) {
     const slotId = `iijs-${i}`;
     const element = document.getElementById(`iijs-ph-${i}`);
